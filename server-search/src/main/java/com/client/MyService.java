@@ -1,15 +1,17 @@
 package com.client;
 
 
+import com.ServerException;
 import com.amadeus.AmadeusFacade;
 import com.amadeus.resources.FlightOfferSearch;
-import com.google.gson.Gson;
+import com.amadeus.resources.FlightOrder;
+import com.amadeus.resources.Traveler;
 import com.repository.*;
 import com.repository.model.communication.*;
-import com.repository.model.database.MyTraveler;
-import com.repository.model.database.TravelerDocument;
-import com.repository.model.database.TravelerPhone;
-import com.repository.model.database.User;
+import com.repository.model.data.FlightOfferSearchDTO;
+import com.repository.model.data.FlightOrderDTO;
+import com.repository.model.database.*;
+import com.strategy.UserBasedTravelerCreationStrategy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -20,8 +22,8 @@ import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 
@@ -44,14 +46,7 @@ public class MyService implements Serializable {
     public void start(int port) throws IOException, ClassNotFoundException {
         ServerSocket serverSocket = new ServerSocket(port);
         log.info("START SERVER");
-        //TODO obsluga enuma
-  /*      for (Map.Entry<String, AirportCode> entry : AirportCode.getByIata().entrySet())
-        {
-            log.info(entry.getKey());
-            log.info(entry.getValue().name());
-        }
-        AirportCode warsaw = AirportCode.valueOf("WARSAW");
-     */
+
         while (true) {
             Socket clientSocket = serverSocket.accept();
             ObjectOutputStream out = new ObjectOutputStream(clientSocket.getOutputStream());
@@ -74,32 +69,118 @@ public class MyService implements Serializable {
                 out.writeObject(registerUserResponse);
             }
 
-            if(request instanceof ClientDataRequest){
+            if (request instanceof ClientDataRequest) {
                 ClientDataResponse clientDataResponse = dataToShow((ClientDataRequest) request);
                 out.writeObject(clientDataResponse);
             }
+
+            if (request instanceof ReservationFlightRequest) {
+                ReservationFlightResponse reservationFlightResponse = flightReservation((ReservationFlightRequest) request);
+                out.writeObject(reservationFlightResponse);
+            }
+
+            if (request instanceof ReservedFlightsRequest) {
+                ReservedFlightsResponse reservationFlightResponse = findReservedFlight((ReservedFlightsRequest) request);
+                out.writeObject(reservationFlightResponse);
+            }
+
+            if (request instanceof ClientEditRequest) {
+                ClientEditResponse clientEditResponse = editData((ClientEditRequest) request);
+                out.writeObject(clientEditResponse);
+            }
+
 
             close(clientSocket, out, in);
         }
     }
 
-    private SearchFlightResponse findSearch(SearchFlightRequest request) {
-        Optional<List<FlightOfferSearch>> flightOfferSearches = Optional.ofNullable(amadeusFacade.searchFlight(request));
-        if (flightOfferSearches.isEmpty()) {
-            try {
+    private ReservedFlightsResponse findReservedFlight(ReservedFlightsRequest request) {
+        User user = request.getUser();
+        MyTraveler byUserId = myTravelerRepository.findByUserId(user.getId());
+        if (byUserId == null)
+            return new ReservedFlightsResponse("TRAVELER NOT FOUND", null);
+        List<Reservation> byMyTravelerId = reservationRepository.findByMyTravelerId(byUserId.getId());
 
-            } catch (Exception e) {
-                return new SearchFlightResponse("Nie znaleziono lotu");
+        List<FlightOrderDTO> collect1 = new ArrayList<>();
+        FlightOrderDTO flightOrderDTO = null;
+        int i = 1;
+        for (Reservation elemRes : byMyTravelerId) {
+            FlightOrder flightOrder = amadeusFacade.getOrderedFlight(elemRes.getReservationApiCode()).orElse(null);
+            if (flightOrder != null)
+                flightOrderDTO = new FlightOrderDTO(flightOrder, elemRes.getQuantityOfTickets(), i);
+            if (flightOrderDTO != null) {
+                collect1.add(flightOrderDTO);
+                i++;
             }
+
         }
 
-        List<FlightOfferSearch> flightOfferSearches1 = flightOfferSearches.get();
+
+        return new ReservedFlightsResponse("FOUND", collect1);
+    }
+
+    private ReservationFlightResponse flightReservation(ReservationFlightRequest request) {
 
 
-        List<String> collect = flightOfferSearches1.stream()
-                .map(e -> new Gson().toJson(e))
+        FlightOfferSearchDTO flightToReservation = request.getFlightToReservation();
+
+        User user = request.getUser();
+        MyTraveler myTraveler = myTravelerRepository.findByUserId(user.getId());
+        if (myTraveler == null)
+            return new ReservationFlightResponse("FILL ALL TRAVELER DATA", false);
+
+
+        String parse = flightToReservation.getArrivalTime().substring(0, 10);
+
+
+        List<FlightOfferSearch> flightOfferSearches = amadeusFacade.searchFlight(flightToReservation.getDestinationIATA(),
+                flightToReservation.getDepartureIATA(), parse, flightToReservation.getFlightClass()).orElse(null);
+        TravelerPhone byId = travelerPhoneRepository.findById(myTraveler.getTravelerPhone().getId());
+        TravelerDocument byMyTravelerId = travelerDocumentRepository.findByMyTravelerId(myTraveler.getId());
+        Traveler travlerFromBase = new UserBasedTravelerCreationStrategy(myTraveler, byMyTravelerId, byId).createTraveler();
+
+
+        FlightOfferSearch flightOfferSearch = null;
+        for (FlightOfferSearch elem : flightOfferSearches) {
+            if (elem.getId().equals(flightToReservation.getId())) {
+                flightOfferSearch = elem;
+                break;
+            }
+        }
+        String orderFlight = null;
+        Traveler[] travelers = {travlerFromBase};
+
+        if (flightOfferSearch != null)
+            try {
+                orderFlight = amadeusFacade.createOrderFlight(travelers, flightOfferSearch).orElse(null);
+
+            } catch (ServerException e) {
+                new ReservationFlightResponse("CANT BOOK FLIGHT", false);
+
+            }
+
+        Reservation save = reservationRepository.save(new Reservation(orderFlight, myTraveler, request.getQuantityOfTickets()));
+        if (save != null)
+            return new ReservationFlightResponse("BOOKED FLIGHT", true);
+
+
+        return new ReservationFlightResponse("CANT BOOK FLIGHT", false);
+    }
+
+    private SearchFlightResponse findSearch(SearchFlightRequest request) {
+        List<FlightOfferSearch> flightOfferSearches = amadeusFacade.searchFlight(
+                request.getOriginLocationCode(), request.getDestinationLocationCode(), request.getDepartureDate(), request.getTravelClass()
+        ).orElse(null);
+
+        if (flightOfferSearches == null)
+            return new SearchFlightResponse("FLIGHT NOT FOUND");
+
+        List<FlightOfferSearchDTO> collect = flightOfferSearches.stream()
+                .map(FlightOfferSearchDTO::new)
                 .collect(Collectors.toList());
-        return new SearchFlightResponse("Znaleziono", collect);
+
+
+        return new SearchFlightResponse("FOUND", collect);
     }
 
 
@@ -107,52 +188,108 @@ public class MyService implements Serializable {
         User user = userRepository.findUserByEmailAndPassword(loginUserRequest.getEmail(), loginUserRequest.getPassword());
 
 
-
         if (user != null) {
             log.info("znaleziono");
             //System.out.println(myTraveler.getDateOfBirth());
-            return new LoginUserResponse("Zalogowano", user);
+            return new LoginUserResponse("LOGIN", user);
 
         }
 
-        return new LoginUserResponse("BLEDNY LOGIN LUB HASLO");
+        return new LoginUserResponse("WRONG LOGIN OR PASSWORD");
 
     }
-
 
 
     private RegisterUserResponse userToRegister(RegisterUserRequest registerUserRequest) {
-        User user = new User();
-        user.setEmail(registerUserRequest.getEmail());
-        user.setPassword(registerUserRequest.getPassword());
-        User user1 = null;
+        User user = new User.Builder().email(registerUserRequest.getEmail()).password(registerUserRequest.getPassword()).build();
+
         try {
-            user1 = userRepository.save(user);
+            userRepository.save(user);
         } catch (Exception e) {
-            return new RegisterUserResponse("TAKI EMAIL JEST JUZ UZYWANY", false );
+            return new RegisterUserResponse("THIS EMAIL ALREADY IN USE", false);
         }
 
-        return new RegisterUserResponse("ZAREJESTROWANO", true);
+        return new RegisterUserResponse("USER REGISTERED", true);
     }
 
+
+    private ClientEditResponse editData(ClientEditRequest clientEditRequest) {
+
+        User user = clientEditRequest.getUser();
+        MyTraveler myTravelerRequest = clientEditRequest.getMyTraveler();
+        TravelerDocument travelerDocumentRequest = clientEditRequest.getTravelerDocument();
+        TravelerPhone travelerPhoneRequest = clientEditRequest.getTravelerPhone();
+
+        TravelerDocument travelerDocument = null;
+        TravelerPhone travelerPhone = null;
+
+
+        MyTraveler myTraveler = myTravelerRepository.findByUserId(user.getId());
+        if (myTraveler != null) {
+            travelerDocument = travelerDocumentRepository.findByMyTravelerId(myTraveler.getId());
+            travelerPhone = travelerPhoneRepository.findById(myTraveler.getTravelerPhone().getId());
+        }
+
+        if (myTraveler == null || travelerDocument == null || travelerPhone == null) {
+            myTraveler = new MyTraveler();
+            travelerDocument = new TravelerDocument();
+            travelerPhone = new TravelerPhone();
+        }
+
+        myTraveler.setName(myTravelerRequest.getName());
+        myTraveler.setSurname(myTravelerRequest.getSurname());
+        myTraveler.setDateOfBirth(myTravelerRequest.getDateOfBirth());
+
+        travelerDocument.setDocumentType(travelerDocumentRequest.getDocumentType());
+        travelerDocument.setNumberDocument(travelerDocumentRequest.getNumberDocument());
+        travelerDocument.setExpireDate(travelerDocumentRequest.getExpireDate());
+        travelerDocument.setIssuanceCountry("PL");
+        travelerDocument.setNationality("PL");
+
+
+        travelerPhone.setDeviceType("MOBILE");
+        travelerPhone.setCountryCallingCode(48);
+
+        travelerPhone.setPhoneNumber(travelerPhoneRequest.getPhoneNumber());
+
+        user.setPassword(user.getPassword());
+
+        myTraveler.setUser(user);
+
+
+        userRepository.save(user);
+        TravelerPhone travelerPhoneSave = travelerPhoneRepository.save(travelerPhone);
+        myTraveler.setTravelerPhone(travelerPhoneSave);
+        MyTraveler myTravelerSave = myTravelerRepository.save(myTraveler);
+        travelerDocument.setMyTraveler(myTravelerSave);
+        travelerDocumentRepository.save(travelerDocument);
+
+        return new ClientEditResponse("DATA CHANGED");
+    }
+
+
     private ClientDataResponse dataToShow(ClientDataRequest clientDataRequest) {
+
+
         User user = clientDataRequest.getUser();
 
         MyTraveler myTraveler = myTravelerRepository.findByUserId(user.getId());
+
+
         if (myTraveler == null) {
-            return new ClientDataResponse("NIE DZIALA");
+            return new ClientDataResponse("TRAVELER NULL");
         }
         TravelerDocument travelerDocument = travelerDocumentRepository.findByMyTravelerId(myTraveler.getId());
 
-        if(travelerDocument==null){
-            return new ClientDataResponse("NIE DZIALA");
+        if (travelerDocument == null) {
+            return new ClientDataResponse("DOCUMENT NULL");
         }
 
-        Optional<TravelerPhone> travelerPhone = travelerPhoneRepository.findById(myTraveler.getTravelerPhone().getId());
-        if(travelerPhone==null){
-            return new ClientDataResponse("NIE DZIALA");
+        TravelerPhone travelerPhone = travelerPhoneRepository.findById(myTraveler.getTravelerPhone().getId());
+        if (travelerPhone == null) {
+            return new ClientDataResponse("PHONE NULL");
         }
-        return new ClientDataResponse("DZIALA", user, myTraveler, travelerDocument, travelerPhone.get());
+        return new ClientDataResponse("USER DATA", user, myTraveler, travelerDocument, travelerPhone);
     }
 
 

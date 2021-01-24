@@ -26,8 +26,21 @@ public class ClientControl {
         return (SearchFlightResponse) send(searchFlightRequest);
     }
 
-    public ClientDataResponse clientDataComunication(ClientDataRequest clientDataRequest){
-        return (ClientDataResponse)  send(clientDataRequest);
+    public ClientDataResponse clientDataComunication(ClientDataRequest clientDataRequest) {
+        return (ClientDataResponse) send(clientDataRequest);
+    }
+
+    public ClientEditResponse clientEditCommunication(ClientEditRequest clientEditRequest) {
+        return (ClientEditResponse) send(clientEditRequest);
+    }
+
+
+    public ReservationFlightResponse flightReservation(ReservationFlightRequest reservationFlightRequest) {
+        return (ReservationFlightResponse) send(reservationFlightRequest);
+    }
+
+    public ReservedFlightsResponse getReservedFlight(ReservedFlightsRequest reservedFlightsRequest) {
+        return (ReservedFlightsResponse) send(reservedFlightsRequest);
     }
 
     private Object send(Object request) {

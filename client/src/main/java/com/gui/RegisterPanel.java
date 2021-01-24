@@ -1,5 +1,6 @@
 package com.gui;
 
+import com.observer.LoginObserver;
 import com.repository.model.communication.RegisterUserRequest;
 import com.repository.model.communication.RegisterUserResponse;
 import com.repository.model.database.User;
@@ -17,7 +18,7 @@ import java.util.ResourceBundle;
 @Slf4j
 @Controller
 @Component
-public class RegisterPanel extends GuiPanel {
+public class RegisterPanel extends GuiPanel implements LoginObserver {
     @FXML
     private PasswordField passwordInput;
     @FXML
@@ -26,8 +27,6 @@ public class RegisterPanel extends GuiPanel {
     private TextField emailInput;
     @FXML
     private Label registerError;
-    @FXML
-    private Label loginAfterReg;
 
 
     public boolean validPassword() {
@@ -74,6 +73,7 @@ public class RegisterPanel extends GuiPanel {
             loginAfterReg.setText("Rejestracja przebiegła pomyślnie. Zaloguj się.");*/
             RegisterUserRequest registerUserRequest = new RegisterUserRequest(emailInput.getText(), passwordInput.getText());
             RegisterUserResponse registerUserResponse = clientControl.registerUserCommunication(registerUserRequest);
+
             if (!registerUserResponse.isRegister()) {
                 registerError.setText("This email already exists in the database!");
                 return false;
@@ -85,7 +85,7 @@ public class RegisterPanel extends GuiPanel {
 
     @Override
     public void update(User user) {
-
+        System.out.println("REGISTER");
     }
 
     @Override
